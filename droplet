@@ -1,0 +1,195 @@
+#!/usr/bin/env bash
+# Create a DigitalOcean droplet
+# Bugs:
+#   Only prints/finds the first 200 API results.
+#    If you've got more than 200 droplets you shouldn't be using this.
+set -e
+
+TAG=init # init tag for ansible init config
+PTAG=all # default print all tags
+SIZE=s-1vcpu-1gb
+REGION=lon1
+IMAGE=centos-8-x64
+NAME=temp-$(TZ=UTC date +%Y%m%d%H%M%S)
+KEYID=24135599
+
+error() {
+    echo "$0: ERROR: $1" >&2
+    exit 1
+}
+
+info() {
+    echo "$0: INFO: $1" >&2
+}
+
+chkcomm() {
+    command -v "$1" > /dev/null
+}
+
+listregions() {
+    curl -s -f -H "Authorization: Bearer $DO_API_TOKEN" "https://api.digitalocean.com/v2/regions?per_page=200" | \
+        jq -r '.regions[] | select(.available == true) | "\(.name): \(.slug)"' | sort
+}
+
+listimages() {
+    curl -s -f -H "Authorization: Bearer $DO_API_TOKEN" "https://api.digitalocean.com/v2/images?per_page=200" | \
+        jq -r '.images[].slug' | grep -v '^null$' | sort
+}
+
+listsizes() {
+    curl -s -f -H "Authorization: Bearer $DO_API_TOKEN" "https://api.digitalocean.com/v2/sizes?per_page=200" | \
+        jq -r '.sizes[].slug' | sort
+}
+
+listtags() {
+    curl -s -f -H "Authorization: Bearer $DO_API_TOKEN" "https://api.digitalocean.com/v2/tags?per_page=200" | \
+        jq -r '.tags[] | select(.resources.count > 0) | "\(.name) \(.resources.droplets.count)"'
+}
+
+deletedroplet() {
+    [[ -z "$DELETE" ]] && error "No droplets specified to delete - use ID."
+    curl -s -f -X DELETE -H "Authorization: Bearer $DO_API_TOKEN" "https://api.digitalocean.com/v2/droplets/$DELETE" || \
+        error "Could not delete droplet $DELETE - check the DO dashboard to avoid expense"
+    echo "$DELETE"
+}
+
+printdroplets() {
+    [[ "$PTAG" == "all" ]] && URLEND="" || URLEND="&tag_name=$TAG"
+    curl -s -f -H "Authorization: Bearer $DO_API_TOKEN" "https://api.digitalocean.com/v2/droplets?per_page=200$URLEND" | \
+        jq -r '.droplets[] | "\(.id) \(.networks.v4[].ip_address) \(.name) \(.region.slug) \(.image.slug) \(.size.slug) \(.tags | join(" "))"' | sort
+}
+
+addtag() {
+    curl -s -f -X POST -o /dev/null \
+         -H "Content-Type: application/json" \
+         -H "Authorization: Bearer $DO_API_TOKEN" \
+         "https://api.digitalocean.com/v2/tags" \
+         -d '{"name": "'"$TAG"'"}'
+    curl -s -f -X POST \
+         -H "Content-Type: application/json" \
+         -H "Authorization: Bearer $DO_API_TOKEN" \
+         "https://api.digitalocean.com/v2/tags/$TAG/resources" \
+         -d '{"resources": [ { "resource_id": "'"$DROPLET"'", "resource_type": "droplet" } ] }'
+    curl -s -f -X DELETE \
+         -H "Content-Type: application/json" \
+         -H "Authorization: Bearer $DO_API_TOKEN" \
+         "https://api.digitalocean.com/v2/tags/init/resources" \
+         -d '{"resources": [ { "resource_id": "'"$DROPLET"'", "resource_type": "droplet" } ] }'
+    echo "$DROPLET"
+}
+
+createdroplet() {
+    trap 'error "$0 exited unexpectedly. Check the DO dashboard to avoid expense."' EXIT
+    DROPLETID=$(curl -s -f -X POST \
+                     -H "Content-Type: application/json" \
+                     -H "Authorization: Bearer $DO_API_TOKEN" \
+                     -d \
+                     '{
+                     "name":"'"$NAME"'",
+                     "region":"'"$REGION"'",
+                     "size":"'"$SIZE"'",
+                     "image":"'"$IMAGE"'",
+                     "ssh_keys":['"$KEYID"'],
+                     "backups":false,
+                     "ipv6":true,
+                     "user_data":null,
+                     "private_networking":null,
+                     "volumes": null,
+                     "tags":["'"$TAG"'"]
+                     }' \
+                         "https://api.digitalocean.com/v2/droplets" | \
+                         jq .droplet.id)
+    [[ -z "$DROPLETID" ]] && error "Could not get ID for new droplet."
+    info "Droplet ID: $DROPLETID"
+    i=0
+    while [[ $i -lt 6 ]]; do
+        DROPLETIP=$(curl -s -f -H "Authorization: Bearer $DO_API_TOKEN" "https://api.digitalocean.com/v2/droplets/$DROPLETID" | \
+                        jq -r '.droplet.networks.v4[].ip_address')
+        [[ -n "$DROPLETIP" ]] && break
+        (( i++ ))
+        sleep 10
+    done
+    if [[ -z "$DROPLETIP" ]] || [[ "$DROPLETIP" != *.*.*.* ]]; then
+        error "Could not get IP for droplet $DROPLET."
+    fi
+    trap - EXIT
+    info "Droplet name: $NAME"
+    info "Droplet IP: $DROPLETIP"
+    echo "$DROPLETID"
+}
+
+# --- Go! --- #
+
+unset COMMAND
+while getopts ':hRISTpca:n:r:i:s:t:d:' opt; do
+    case $opt in
+        R)
+            COMMAND=listregions
+            ;;
+        I)
+            COMMAND=listimages
+            ;;
+        S)
+            COMMAND=listsizes
+            ;;
+        T)
+            COMMAND=listtags
+            ;;
+        p)
+            COMMAND=printdroplets
+            ;;
+        c)
+            COMMAND=createdroplet
+            ;;
+        a)
+            COMMAND=addtag
+            DROPLET="$OPTARG"
+            ;;
+        n)
+            NAME="$OPTARG"
+            ;;
+        r)
+            REGION="$OPTARG"
+            ;;
+        i)
+            IMAGE="$OPTARG"
+            ;;
+        s)
+            SIZE="$OPTARG"
+            ;;
+        t)
+            TAG="$OPTARG"
+            PTAG="$OPTARG"
+            ;;
+        d)
+            COMMAND=deletedroplet
+            DELETE="$OPTARG"
+            ;;
+        \?|h)
+            cat <<_EOF >&2
+Usage: $0 [-R|-I|-S|-T|-c|-a <ID>|-p|-d <ID>] [-n <name>] [-r <region>] [-i <image>] [-s <size>] [-t <tag>]
+-R : list regions
+-I : list images
+-S : list sizes
+-T : list active tags
+-c : create droplet
+-a <dropletid> : add tag (specify -t <tag>)
+-p : print droplets (long listing)
+-d <dropletid> : delete droplet
+-n <name> : use name
+-r <region> : use region
+-i <image> : use image
+-s <size> : use size
+-t <tag> : use tag
+_EOF
+            exit 1
+            ;;
+    esac
+done
+
+chkcomm jq || error "jq command not found."
+chkcomm curl || error "curl command not found."
+[[ -z "$COMMAND" ]] && error "No command specified."
+[[ -z "$DO_API_TOKEN" ]] && error "Environment variable DO_API_TOKEN not set."
+
+$COMMAND

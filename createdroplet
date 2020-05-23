@@ -1,0 +1,66 @@
+#!/usr/bin/env bash
+# Create a droplet and configure it
+ANSIBLE=/Users/dave/github/home-network/ansible
+set -e
+
+error() {
+    echo "$0: ERROR: $1" >&2
+    exit 1
+}
+
+info() {
+    echo "$0: INFO: $1" >&2
+}
+
+TAGS=()
+RUNSITE=false
+while getopts ':hn:r:i:s:t:' opt; do
+    case $opt in
+        n)
+            NAME="$OPTARG"
+            ;;
+        r)
+            REGION="$OPTARG"
+            ;;
+        i)
+            IMAGE="$OPTARG"
+            ;;
+        s)
+            SIZE="$OPTARG"
+            ;;
+        t)
+            TAGS+=("$OPTARG")
+            RUNSITE=true
+            ;;
+        \?|h)
+            echo "Usage: $0 [-t <tag>] [-n <name>] [-r <region>] [-i <image>] [-s <size>]" >&2
+            exit 1
+            ;;
+    esac
+done
+[[ -z $TAGS ]] && TAGS=( "untagged" )
+
+CARGS=( )
+[[ -n "$NAME" ]]   && CARGS+=("-n" "$NAME")
+[[ -n "$REGION" ]] && CARGS+=("-r" "$REGION")
+[[ -n "$IMAGE" ]]  && CARGS+=("-i" "$IMAGE")
+[[ -n "$SIZE" ]]   && CARGS+=("-s" "$SIZE")
+
+DROPLET="$(droplet -c -t init "${CARGS[@]}")"
+trap 'error "$0 exited unexpectedly. Check the DO dashboard to avoid expense. Droplet ID: $DROPLET"' EXIT
+[[ -z "$DROPLET" ]] && error "Could not create droplet"
+IP=$(droplet -p -t init | grep "^$DROPLET " | awk '{print $2}')
+[[ -z "$IP" ]] && error "Could not get IP for droplet $DROPLET"
+
+until ssh -o ConnectTimeout=3 -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no root@"$IP" "true" &> /dev/null; do
+    sleep 1
+done
+cd "$ANSIBLE"
+ansible-playbook -i digital_ocean.py -l "$IP" init.yml >&2
+for TAG in "${TAGS[@]}"; do
+    droplet -a "$DROPLET" -t "$TAG" >&2
+done
+$RUNSITE && ansible-playbook -i digital_ocean.py -l "$IP" site.yml >&2
+info "IP: $IP"
+echo "$DROPLET"
+trap - EXIT
