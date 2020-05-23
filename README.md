@@ -1,0 +1,2 @@
+# digitalocean
+Scripts for DigitalOcean
