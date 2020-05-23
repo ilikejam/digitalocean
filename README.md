@@ -1,2 +1,2 @@
 # digitalocean
-Scripts for DigitalOcean
+Noddy scripts for DigitalOcean
