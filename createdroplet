@@ -49,7 +49,7 @@ CARGS=( )
 DROPLET="$(droplet -c -t init "${CARGS[@]}")"
 trap 'error "$0 exited unexpectedly. Check the DO dashboard to avoid expense. Droplet ID: $DROPLET"' EXIT
 [[ -z "$DROPLET" ]] && error "Could not create droplet"
-IP=$(droplet -p -t init | grep "^$DROPLET " | awk '{print $2}')
+IP=$(droplet -P $DROPLET | head -1)
 [[ -z "$IP" ]] && error "Could not get IP for droplet $DROPLET"
 
 until ssh -o ConnectTimeout=3 -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no root@"$IP" "true" &> /dev/null; do

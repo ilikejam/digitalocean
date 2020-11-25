@@ -4,7 +4,7 @@ set -e
 [[ -z $1 ]] && echo "Supply region as \$1 - run 'droplet -R' to see regions" && exit 1
 [[ $1 == "-h" ]] && echo "Usage: $0 <region> - run 'droplet -R' to see regions" && exit 1
 DROPLET="$(createdroplet -t vpn_server -r "$1" -n "vpn-$1")"
-IP="$(droplet -p -t vpn_server | grep "^$DROPLET " | awk '{print $2}')"
+IP="$(droplet -P $DROPLET | head -1)"
 
 echo "Client Conf:"
 ssh -q -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=no "$IP" "sudo /root/wggenconf"

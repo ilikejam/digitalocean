@@ -59,6 +59,11 @@ printdroplets() {
         jq -r '.droplets[] | "\(.id) \(.networks.v4[].ip_address) \(.name) \(.region.slug) \(.image.slug) \(.size.slug) \(.tags | join(" "))"' | sort
 }
 
+dropletpubips() {
+    curl -s -f -H "Authorization: Bearer $DO_API_TOKEN" "https://api.digitalocean.com/v2/droplets/$DROPLETID" | \
+        jq -r '.droplet.networks.v4[] | select(.type == "public") | .ip_address'
+}
+
 addtag() {
     curl -s -f -X POST -o /dev/null \
          -H "Content-Type: application/json" \
@@ -103,10 +108,9 @@ createdroplet() {
     info "Droplet ID: $DROPLETID"
     i=0
     while [[ $i -lt 6 ]]; do
-        DROPLETIP=$(curl -s -f -H "Authorization: Bearer $DO_API_TOKEN" "https://api.digitalocean.com/v2/droplets/$DROPLETID" | \
-                        jq -r '.droplet.networks.v4[].ip_address')
+        DROPLETIP=$(dropletpubips | head -1)
         [[ -n "$DROPLETIP" ]] && break
-        (( i++ ))
+        (( ++i ))
         sleep 10
     done
     if [[ -z "$DROPLETIP" ]] || [[ "$DROPLETIP" != *.*.*.* ]]; then
@@ -121,7 +125,7 @@ createdroplet() {
 # --- Go! --- #
 
 unset COMMAND
-while getopts ':hRISTpca:n:r:i:s:t:d:' opt; do
+while getopts ':hRISTP:pca:n:r:i:s:t:d:' opt; do
     case $opt in
         R)
             COMMAND=listregions
@@ -134,6 +138,10 @@ while getopts ':hRISTpca:n:r:i:s:t:d:' opt; do
             ;;
         T)
             COMMAND=listtags
+            ;;
+        P)
+            COMMAND=dropletpubips
+            DROPLETID="$OPTARG"
             ;;
         p)
             COMMAND=printdroplets
